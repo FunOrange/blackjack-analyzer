@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "bun run index.ts"
   },
   "author": "",
   "license": "ISC",
@@ -13,6 +13,10 @@
     "ts-pattern": "^5.1.2"
   },
   "devDependencies": {
-    "prettier": "^3.2.5"
+    "@types/node": "^20.13.0",
+    "@types/ramda": "^0.30.0",
+    "prettier": "^3.2.5",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.5"
   }
 }

@@ -35,5 +35,6 @@ entity-name-mapping.json
 .vercel
 
 # typescript
+dist
 *.tsbuildinfo
 next-env.d.ts

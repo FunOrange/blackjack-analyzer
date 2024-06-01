@@ -204,7 +204,23 @@ export const nextState = (state: BlackJackState, playerAction?: PlayerAction): B
           ...state,
           state: 'dealer-turn' as const,
         }))
-        .with(PlayerAction.Double, () => state)
+        .with(PlayerAction.Double, () => {
+          const [playerCard, ...shoe] = state.shoe;
+          const playerHand = [...state.playerHand, playerCard];
+          const playerHandValue = handValue(playerHand);
+          const bet = state.bet * 2;
+          const nextState =
+            typeof playerHandValue === 'number' && playerHandValue > 21
+              ? ('game-over' as const) // player bust
+              : ('dealer-turn' as const);
+          return {
+            ...state,
+            shoe,
+            playerHand,
+            bet,
+            state: nextState,
+          };
+        })
         .with(PlayerAction.Split, () => state)
         .exhaustive(),
     )
