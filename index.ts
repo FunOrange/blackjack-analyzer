@@ -1,14 +1,16 @@
 import { match } from 'ts-pattern';
 import {
+  BlackJackState,
   PlayerAction,
   basicStrategy,
-  determineResult,
+  determinePlayerHandOutcomes,
   formatHandValue,
   handValue,
   initState,
   nextState,
   printState,
 } from './blackjack';
+import { assoc, zip } from 'ramda';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -16,45 +18,19 @@ const green = (str: string) => `\x1b[32m${str}\x1b[0m`;
 const red = (str: string) => `\x1b[31m${str}\x1b[0m`;
 const yellow = (str: string) => `\x1b[33m${str}\x1b[0m`;
 
-const autoPlay = async () => {
-  const flatBet = 100;
-  let bankroll = 1000;
-  while (true) {
-    bankroll -= flatBet;
-    let state = initState(flatBet);
-    printState(state);
-
-    while (state.state !== 'game-over') {
-      let log = '';
-      if (state.state === 'player-turn') {
-        const playerAction = basicStrategy(state);
-        log =
-          playerAction === PlayerAction.Stand
-            ? `Player stands on ${formatHandValue(handValue(state.playerHand))}`
-            : `Player hits on ${formatHandValue(handValue(state.playerHand))}`;
-        state = nextState(state, playerAction);
-        printState(state);
-      } else {
-        state = nextState(state);
-        printState(state);
-      }
-      if (log) {
-        console.log(log);
-        await sleep(1000);
-      }
-      await sleep(50);
-    }
-    const gameResult = determineResult(state);
-    const result = gameResult.result;
+const printGameResult = (game: BlackJackState): { earnings: number } => {
+  const playerHandOutcomes = determinePlayerHandOutcomes(game);
+  let earnings = 0;
+  for (const outcome of playerHandOutcomes) {
     console.log(
-      match(gameResult)
+      match(outcome)
         .with({ result: 'player-win' }, ({ reason }) =>
           green(
             (reason === 'blackjack' ? 'Blackjack! ' : reason === 'dealer-bust' ? 'Dealer busts. ' : '') +
               `Player wins!`,
           ),
         )
-        .with({ result: 'dealer-win' }, ({ reason }) =>
+        .with({ result: 'player-loss' }, ({ reason }) =>
           red(
             (reason === 'blackjack' ? 'Dealer has blackjack. ' : reason === 'player-bust' ? 'Bust. ' : '') +
               'Player loses.',
@@ -63,13 +39,47 @@ const autoPlay = async () => {
         .with({ result: 'push' }, () => yellow('Push.'))
         .exhaustive(),
     );
-    if (result === 'player-win') bankroll += state.bet * 2;
-    if (result === 'push') bankroll += state.bet;
-    console.log(
-      `Bankroll: $${bankroll} ${
-        result === 'player-win' ? green(`+$${state.bet}`) : result === 'dealer-win' ? red(`-$${state.bet}`) : ''
-      }`,
-    );
+  }
+  for (const [bet, outcome] of zip(game.bets, playerHandOutcomes)) {
+    if (outcome.result === 'player-win') earnings += bet * 2;
+    if (outcome.result === 'push') earnings += bet;
+  }
+  return { earnings };
+};
+
+const autoPlay = async () => {
+  const flatBet = 100;
+  let bankroll = 1000;
+  while (true) {
+    bankroll -= flatBet;
+    let game = initState(flatBet);
+    printState(game);
+
+    while (game.state !== 'game-over') {
+      let log = '';
+      if (game.state === 'player-turn') {
+        const playerAction = basicStrategy(game);
+        const playerHand = game.playerHands[game.actionableHandIndex];
+        log =
+          playerAction === PlayerAction.Stand
+            ? `Player stands on ${formatHandValue(handValue(playerHand))}`
+            : `Player hits on ${formatHandValue(handValue(playerHand))}`;
+        game = nextState(game, playerAction);
+        printState(game);
+      } else {
+        game = nextState(game);
+        printState(game);
+      }
+      if (log) {
+        console.log(log);
+        await sleep(1000);
+      }
+      await sleep(50);
+    }
+    const { earnings } = printGameResult(game);
+    bankroll += earnings;
+    const net = earnings - flatBet;
+    console.log(`Bankroll: $${bankroll} ${net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${net}`) : ''}`);
     await sleep(2500);
   }
 };
@@ -79,11 +89,11 @@ const manualPlay = async () => {
   let bankroll = 1000;
   while (true) {
     bankroll -= flatBet;
-    let state = initState(flatBet);
-    printState(state);
+    let game = initState(flatBet);
+    printState(game);
 
-    while (state.state !== 'game-over') {
-      if (state.state === 'player-turn') {
+    while (game.state !== 'game-over') {
+      if (game.state === 'player-turn') {
         // get the next action from the user
         let userInput: string;
         while (!['s', 'h', 'd'].includes(userInput)) {
@@ -98,40 +108,18 @@ const manualPlay = async () => {
           .with('d', () => PlayerAction.Double)
           .exhaustive();
         if (playerAction === PlayerAction.Double) {
-          bankroll -= state.bet;
+          bankroll -= game.startingBet;
         }
-        state = nextState(state, playerAction);
+        game = nextState(game, playerAction);
       } else {
-        state = nextState(state);
+        game = nextState(game);
       }
-      printState(state);
+      printState(game);
     }
-    const gameResult = determineResult(state);
-    const result = gameResult.result;
-    console.log(
-      match(gameResult)
-        .with({ result: 'player-win' }, ({ reason }) =>
-          green(
-            (reason === 'blackjack' ? 'Blackjack! ' : reason === 'dealer-bust' ? 'Dealer busts. ' : '') +
-              `Player wins!`,
-          ),
-        )
-        .with({ result: 'dealer-win' }, ({ reason }) =>
-          red(
-            (reason === 'blackjack' ? 'Dealer has blackjack. ' : reason === 'player-bust' ? 'Bust. ' : '') +
-              'Player loses.',
-          ),
-        )
-        .with({ result: 'push' }, () => yellow('Push.'))
-        .exhaustive(),
-    );
-    if (result === 'player-win') bankroll += state.bet * 2;
-    if (result === 'push') bankroll += state.bet;
-    console.log(
-      `Bankroll: $${bankroll} ${
-        result === 'player-win' ? green(`+$${state.bet}`) : result === 'dealer-win' ? red(`-$${state.bet}`) : ''
-      }`,
-    );
+    const { earnings } = printGameResult(game);
+    bankroll += earnings;
+    const net = earnings - flatBet;
+    console.log(`Bankroll: $${bankroll} ${net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${net}`) : ''}`);
     // press any key to play again
     console.log('Press any key to play again...');
     await new Promise<void>((resolve) => {
@@ -157,28 +145,35 @@ const monteCarloSimulation = () => {
   const startTime = Date.now();
   for (let i = 0; i < numSimulations; i++) {
     bankroll -= flatBet;
-    let state = initState(flatBet);
+    let game = initState(flatBet);
 
-    while (state.state !== 'game-over') {
-      if (state.state === 'player-turn') {
-        const playerAction = basicStrategy(state);
-        state = nextState(state, playerAction);
+    while (game.state !== 'game-over') {
+      if (game.state === 'player-turn') {
+        const playerAction = basicStrategy(game);
+        if (playerAction === PlayerAction.Double) {
+          bankroll -= game.startingBet;
+        } else if (playerAction === PlayerAction.Split) {
+          bankroll -= game.startingBet;
+        }
+        game = nextState(game, playerAction);
       } else {
-        state = nextState(state);
+        game = nextState(game);
       }
     }
-    const gameResult = determineResult(state);
-    const result = gameResult.result;
-    if (result === 'player-win') {
-      bankroll += state.bet * 2;
-      wins++;
-    }
-    if (result === 'dealer-win') {
-      losses++;
-    }
-    if (result === 'push') {
-      bankroll += state.bet;
-      pushes++;
+    const playerHandOutcomes = determinePlayerHandOutcomes(game);
+    for (const [bet, outcome] of zip(game.bets, playerHandOutcomes)) {
+      const result = outcome.result;
+      if (result === 'player-win') {
+        bankroll += bet * 2;
+        wins++;
+      }
+      if (result === 'player-loss') {
+        losses++;
+      }
+      if (result === 'push') {
+        bankroll += bet;
+        pushes++;
+      }
     }
   }
 
@@ -189,4 +184,6 @@ const monteCarloSimulation = () => {
   console.log(`${numSimulations} simulations in ${(Date.now() - startTime) / 1000} seconds`);
 };
 
+autoPlay();
+monteCarloSimulation();
 manualPlay();

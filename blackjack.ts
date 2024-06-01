@@ -1,4 +1,4 @@
-import { sum } from 'ramda';
+import { assoc, isEmpty, sum } from 'ramda';
 import { Pattern, match } from 'ts-pattern';
 
 class UnreachableError extends Error {
@@ -109,63 +109,67 @@ const UNSHUFFLED_DECK_TEMPLATE = (() =>
     Object.values(FaceValue).map((value) => ({ suit, faceValue: value }) as Card),
   ))();
 
-interface BlackJackState {
+export interface BlackJackState {
   shoe: Card[];
-  playerHand: Card[];
+  playerHands: Card[][];
+  actionableHandIndex: number;
   dealerHand: Card[];
   state: 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
-  bet: number;
+  startingBet: number;
+  bets: number[]; // normally one value but can be multiple for splits
   ruleset: BlackjackRuleset;
 }
 
-export const initState = (betDollars: number): BlackJackState => {
+export const initState = (startingBet: number): BlackJackState => {
   const numDecks = 8;
   const shoe = Array.from({ length: numDecks }, () => UNSHUFFLED_DECK_TEMPLATE)
     .flat()
     .sort(() => Math.random() - 0.5);
   return {
     shoe,
-    playerHand: [],
+    playerHands: [[]],
+    actionableHandIndex: 0,
     dealerHand: [],
     state: 'dealing',
-    bet: betDollars,
+    startingBet,
+    bets: [startingBet],
     ruleset: defaultRuleset,
   };
 };
 
-export const nextState = (state: BlackJackState, playerAction?: PlayerAction): BlackJackState =>
-  match(state.state)
+export const nextState = (game: BlackJackState, playerAction?: PlayerAction): BlackJackState =>
+  match(game.state)
     .with('dealing', () => {
-      if (state.playerHand.length === 0) {
-        const [playerCard, ...shoe] = state.shoe;
+      if (game.playerHands[0].length === 0) {
+        const [playerCard, ...shoe] = game.shoe;
         return {
-          ...state,
+          ...game,
           shoe,
-          playerHand: [playerCard],
+          playerHands: [[playerCard]],
         };
-      } else if (state.playerHand.length === 1 && state.dealerHand.length === 0) {
-        const [dealerCard, ...shoe] = state.shoe;
+      } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 0) {
+        const [dealerCard, ...shoe] = game.shoe;
         const dealerHand = [dealerCard];
         return {
-          ...state,
+          ...game,
           shoe,
           dealerHand,
         };
-      } else if (state.playerHand.length === 1 && state.dealerHand.length === 1) {
-        const [playerCard, ...shoe] = state.shoe;
-        const playerHand = [state.playerHand[0], playerCard];
+      } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 1) {
+        const [playerCard, ...shoe] = game.shoe;
+        const playerHand = [...game.playerHands[0], playerCard];
         if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
           return {
-            ...state,
+            ...game,
             shoe,
-            playerHand,
+            playerHands: [playerHand],
             state: 'dealer-turn' as const, // dealer could still have 21/blackjack
           };
         }
         return {
-          ...state,
+          ...game,
           shoe,
-          playerHand,
+          playerHands: [playerHand],
           state: 'player-turn' as const,
         };
       }
@@ -174,54 +178,68 @@ export const nextState = (state: BlackJackState, playerAction?: PlayerAction): B
     .with('player-turn', () =>
       match(playerAction)
         .with(PlayerAction.Hit, () => {
-          const [playerCard, ...shoe] = state.shoe;
-          const playerHand = [...state.playerHand, playerCard];
+          const [playerCard, ...shoe] = game.shoe;
+          const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
+          const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
+          const hasMoreActionableHands =
+            game.actionableHandIndex < game.playerHands.filter((hand) => isEmpty(hand)).length - 1;
           if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
             // player 21/blackjack
+            const state = 'dealer-turn' as const; // dealer could still have 21/blackjack
             return {
-              ...state,
+              ...game,
               shoe,
-              playerHand,
-              state: 'dealer-turn' as const, // dealer could still have 21/blackjack
+              playerHands,
+              actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
+              state: hasMoreActionableHands ? ('player-turn' as const) : state,
             };
           }
           if ((handValue(playerHand) as number) > 21) {
             // player busts
+            const state = 'game-over' as const;
             return {
-              ...state,
+              ...game,
               shoe,
-              playerHand,
-              state: 'game-over' as const,
+              playerHands,
+              actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
+              state: hasMoreActionableHands ? ('player-turn' as const) : state,
             };
           }
           return {
-            ...state,
+            ...game,
             shoe,
-            playerHand,
+            playerHands,
           };
         })
         .with(PlayerAction.Stand, () => ({
-          ...state,
+          ...game,
           state: 'dealer-turn' as const,
         }))
         .with(PlayerAction.Double, () => {
-          const [playerCard, ...shoe] = state.shoe;
-          const playerHand = [...state.playerHand, playerCard];
+          const [playerCard, ...shoe] = game.shoe;
+          const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
+          const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
           const playerHandValue = handValue(playerHand);
-          const bet = state.bet * 2;
-          const nextState =
+          const bet = game.bets[game.actionableHandIndex] + game.startingBet;
+          const bets = assoc(game.actionableHandIndex, bet, game.bets);
+          const state =
             typeof playerHandValue === 'number' && playerHandValue > 21
               ? ('game-over' as const) // player bust
               : ('dealer-turn' as const);
+          const hasMoreActionableHands =
+            game.actionableHandIndex < game.playerHands.filter((hand) => isEmpty(hand)).length - 1;
           return {
-            ...state,
+            ...game,
             shoe,
-            playerHand,
-            bet,
-            state: nextState,
+            playerHands,
+            bets,
+            actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
+            state: hasMoreActionableHands ? ('player-turn' as const) : state,
           };
         })
-        .with(PlayerAction.Split, () => state)
+        .with(PlayerAction.Split, () => {
+          return { ...game };
+        })
         .exhaustive(),
     )
     .with('dealer-turn', () => {
@@ -237,27 +255,28 @@ export const nextState = (state: BlackJackState, playerAction?: PlayerAction): B
           (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 21)
         );
       };
-      if (dealerShouldStand(state.dealerHand)) {
+      if (dealerShouldStand(game.dealerHand)) {
         // dealer stands
         return {
-          ...state,
+          ...game,
           state: 'game-over' as const,
         };
       } else {
         // dealer hits
-        const [dealerCard, ...shoe] = state.shoe;
-        const dealerHand = [...state.dealerHand, dealerCard];
-        if (handValue(state.playerHand) === 'blackjack') {
+        const [dealerCard, ...shoe] = game.shoe;
+        const dealerHand = [...game.dealerHand, dealerCard];
+        if (game.playerHands.every((playerHand) => handValue(playerHand) === 'blackjack')) {
+          // dealer now has 2 cards and is up against all blackjacks
           // either push or player wins, no need for dealer to keep hitting
           return {
-            ...state,
+            ...game,
             shoe,
             dealerHand,
             state: 'game-over' as const,
           };
         } else {
           return {
-            ...state,
+            ...game,
             shoe,
             dealerHand,
             state: dealerShouldStand(dealerHand) ? ('game-over' as const) : ('dealer-turn' as const),
@@ -270,57 +289,61 @@ export const nextState = (state: BlackJackState, playerAction?: PlayerAction): B
     })
     .exhaustive();
 
-export const printState = (state: BlackJackState) => {
+export const printState = (game: BlackJackState) => {
   console.clear();
   console.log('');
   console.log(
     'Dealer Hand:',
-    `(${formatHandValue(handValue(state.dealerHand))})`,
-    state.dealerHand.map((c) => c.faceValue),
+    `(${formatHandValue(handValue(game.dealerHand))})`,
+    game.dealerHand.map((c) => c.faceValue),
   );
-  console.log(
-    'Player Hand:',
-    `(${formatHandValue(handValue(state.playerHand))})`,
-    state.playerHand.map((c) => c.faceValue),
-  );
-  // console.log('state:', state.state);
+  for (const playerHand of game.playerHands) {
+    console.log(
+      'Player Hand:',
+      `(${formatHandValue(handValue(playerHand))})`,
+      playerHand.map((c) => c.faceValue),
+    );
+  }
 };
 
-export const determineResult = (
-  state: BlackJackState,
-):
+export const determinePlayerHandOutcomes = (
+  game: BlackJackState,
+): (
   | { result: 'player-win'; reason: 'blackjack' | 'dealer-bust' | 'higher-hand' }
-  | { result: 'dealer-win'; reason: 'blackjack' | 'player-bust' | 'higher-hand' }
-  | { result: 'push' } => {
-  if (state.state !== 'game-over') throw new Error('Game is not over');
+  | { result: 'player-loss'; reason: 'blackjack' | 'player-bust' | 'higher-hand' }
+  | { result: 'push' }
+)[] => {
+  if (game.state !== 'game-over') throw new Error('Game is not over');
 
-  const playerHandValue = handValue(state.playerHand);
-  const playerHandValueHigh = typeof playerHandValue === 'object' ? playerHandValue.soft.high : playerHandValue;
-  const dealerHandValue = handValue(state.dealerHand);
-  const dealerHandValueHigh = typeof dealerHandValue === 'object' ? dealerHandValue.soft.high : dealerHandValue;
+  return game.playerHands.map((playerHand) => {
+    const playerHandValue = handValue(playerHand);
+    const playerHandValueHigh = typeof playerHandValue === 'object' ? playerHandValue.soft.high : playerHandValue;
+    const dealerHandValue = handValue(game.dealerHand);
+    const dealerHandValueHigh = typeof dealerHandValue === 'object' ? dealerHandValue.soft.high : dealerHandValue;
 
-  return match({ playerHandValue: playerHandValueHigh, dealerHandValue: dealerHandValueHigh })
-    .with({ playerHandValue: 'blackjack', dealerHandValue: 'blackjack' }, () => ({ result: 'push' }) as const)
-    .with({ playerHandValue: 'blackjack' }, () => ({ result: 'player-win', reason: 'blackjack' }) as const)
-    .with({ dealerHandValue: 'blackjack' }, () => ({ result: 'dealer-win', reason: 'blackjack' }) as const)
-    .with(
-      { playerHandValue: Pattern.number, dealerHandValue: Pattern.number },
-      ({ playerHandValue, dealerHandValue }) => {
-        if (playerHandValue > 21) return { result: 'dealer-win', reason: 'player-bust' } as const;
-        else if (dealerHandValue > 21) return { result: 'player-win', reason: 'dealer-bust' } as const;
-        else if (playerHandValue > dealerHandValue) return { result: 'player-win', reason: 'higher-hand' } as const;
-        else if (playerHandValue < dealerHandValue) return { result: 'dealer-win', reason: 'higher-hand' } as const;
-        else return { result: 'push' } as const;
-      },
-    )
-    .exhaustive();
+    return match({ playerHandValue: playerHandValueHigh, dealerHandValue: dealerHandValueHigh })
+      .with({ playerHandValue: 'blackjack', dealerHandValue: 'blackjack' }, () => ({ result: 'push' }) as const)
+      .with({ playerHandValue: 'blackjack' }, () => ({ result: 'player-win', reason: 'blackjack' }) as const)
+      .with({ dealerHandValue: 'blackjack' }, () => ({ result: 'player-loss', reason: 'blackjack' }) as const)
+      .with(
+        { playerHandValue: Pattern.number, dealerHandValue: Pattern.number },
+        ({ playerHandValue, dealerHandValue }) => {
+          if (playerHandValue > 21) return { result: 'player-loss', reason: 'player-bust' } as const;
+          else if (dealerHandValue > 21) return { result: 'player-win', reason: 'dealer-bust' } as const;
+          else if (playerHandValue > dealerHandValue) return { result: 'player-win', reason: 'higher-hand' } as const;
+          else if (playerHandValue < dealerHandValue) return { result: 'player-loss', reason: 'higher-hand' } as const;
+          else return { result: 'push' } as const;
+        },
+      )
+      .exhaustive();
+  });
 };
 
-export const basicStrategy = (state: BlackJackState): PlayerAction => {
-  if (state.state !== 'player-turn') throw new Error('Not player turn');
+export const basicStrategy = (game: BlackJackState): PlayerAction => {
+  if (game.state !== 'player-turn') throw new Error('Not player turn');
 
-  const playerHandValue = handValue(state.playerHand);
-  const dealerHandValue = handValue(state.dealerHand);
+  const playerHandValue = handValue(game.playerHands[game.actionableHandIndex]);
+  const dealerHandValue = handValue(game.dealerHand);
   if (typeof playerHandValue === 'number') {
     if (playerHandValue >= 17) return PlayerAction.Stand;
     if (playerHandValue <= 11) return PlayerAction.Hit;
