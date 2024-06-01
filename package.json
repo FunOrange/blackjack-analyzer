@@ -1,0 +1,18 @@
+{
+  "name": "blackjack-analyzer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ramda": "^0.30.0",
+    "ts-pattern": "^5.1.2"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5"
+  }
+}
