@@ -1,4 +1,4 @@
-import { assoc, insertAll, pipe, remove, sum } from 'ramda';
+import { aperture, assoc, insertAll, pipe, remove, sum } from 'ramda';
 import { Pattern, match } from 'ts-pattern';
 import { red, yellow } from './terminal';
 
@@ -34,6 +34,7 @@ enum FaceValue {
 interface Card {
   suit: Suit;
   faceValue: FaceValue;
+  faceDown?: boolean;
 }
 
 export enum PlayerAction {
@@ -43,36 +44,55 @@ export enum PlayerAction {
   Split = 'split',
 }
 
-export const rules = {
-  hitSoft17: false,
-  doubleAfterSplit: true, // TODO
-  resplitAces: false, // TODO
-  blackjackPayout: 3 / 2,
-  dealerPeeks: true, // TODO
-  aceAndTenCountsAsBlackjack: true,
-  resplitAce: false, // TODO
+interface BlackjackRuleset {
+  // dealer
+  dealerStandsOnAll17: boolean;
+  dealerPeeks: boolean;
+
+  // splitting
+  splitAces: 0 | 1 | 2 | 3;
+  maxHandsAfterSplit: 1 | 2 | 3 | 4;
+
+  // doubling
+  doubleOn: 'any' | 'hard-9-11' | 'hard-10-11';
+  doubleAfterSplit: boolean;
+
+  // blackjack
+  blackjackPayout: number;
+  aceAndTenCountsAsBlackjack: boolean;
+}
+export const rules: BlackjackRuleset = {
   dealerStandsOnAll17: true,
+  dealerPeeks: true,
+  maxHandsAfterSplit: 4,
+  splitAces: 3,
+  doubleOn: 'any',
+  doubleAfterSplit: true,
+  aceAndTenCountsAsBlackjack: true,
+  blackjackPayout: 3 / 2,
 };
-export type BlackjackRuleset = typeof rules;
 
 export const cardValue = (card: Card, { withAceAs11 } = { withAceAs11: false }) =>
-  match(card)
-    .with({ faceValue: FaceValue.Ace }, () => (withAceAs11 ? 11 : 1)) // can be 11 depending on hand
-    .with({ faceValue: FaceValue.Two }, () => 2)
-    .with({ faceValue: FaceValue.Three }, () => 3)
-    .with({ faceValue: FaceValue.Four }, () => 4)
-    .with({ faceValue: FaceValue.Five }, () => 5)
-    .with({ faceValue: FaceValue.Six }, () => 6)
-    .with({ faceValue: FaceValue.Seven }, () => 7)
-    .with({ faceValue: FaceValue.Eight }, () => 8)
-    .with({ faceValue: FaceValue.Nine }, () => 9)
-    .with({ faceValue: FaceValue.Ten }, () => 10)
-    .with({ faceValue: FaceValue.Jack }, () => 10)
-    .with({ faceValue: FaceValue.Queen }, () => 10)
-    .with({ faceValue: FaceValue.King }, () => 10)
-    .otherwise(() => 0);
+  card.faceDown
+    ? 0
+    : match(card)
+        .with({ faceValue: FaceValue.Ace }, () => (withAceAs11 ? 11 : 1)) // can be 11 depending on hand
+        .with({ faceValue: FaceValue.Two }, () => 2)
+        .with({ faceValue: FaceValue.Three }, () => 3)
+        .with({ faceValue: FaceValue.Four }, () => 4)
+        .with({ faceValue: FaceValue.Five }, () => 5)
+        .with({ faceValue: FaceValue.Six }, () => 6)
+        .with({ faceValue: FaceValue.Seven }, () => 7)
+        .with({ faceValue: FaceValue.Eight }, () => 8)
+        .with({ faceValue: FaceValue.Nine }, () => 9)
+        .with({ faceValue: FaceValue.Ten }, () => 10)
+        .with({ faceValue: FaceValue.Jack }, () => 10)
+        .with({ faceValue: FaceValue.Queen }, () => 10)
+        .with({ faceValue: FaceValue.King }, () => 10)
+        .otherwise(() => 0);
 
-export const handValue = (hand: Card[]): number | 'blackjack' | { soft: { low: number; high: number } } => {
+export const handValue = (_hand: Card[]): number | 'blackjack' | { soft: { low: number; high: number } } => {
+  const hand = _hand.filter((card) => !card.faceDown);
   if (hand.length === 2) {
     const [{ faceValue: card1 }, { faceValue: card2 }] = hand;
     if (rules.aceAndTenCountsAsBlackjack && card1 === FaceValue.Ace && card2 === FaceValue.Ten) return 'blackjack';
@@ -132,7 +152,19 @@ export const initState = (startingBet: number): BlackJackState => {
     .flat()
     .sort(() => Math.random() - 0.5);
   return {
-    shoe,
+    shoe: [
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
+      ...shoe,
+    ],
     playerHands: [[]],
     actionableHandIndex: 0,
     dealerHand: [],
@@ -160,7 +192,7 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
     .with('dealing', () => {
       if (game.playerHands.length === 1) {
         if (game.playerHands[0].length === 0) {
-          // deal first card
+          // deal first card to player
           const [playerCard, ...shoe] = game.shoe;
           return {
             ...game,
@@ -168,7 +200,7 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
             playerHands: [[playerCard]],
           };
         } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 0) {
-          // deal second card
+          // deal second card to dealer
           const [dealerCard, ...shoe] = game.shoe;
           const dealerHand = [dealerCard];
           return {
@@ -177,21 +209,43 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
             dealerHand,
           };
         } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 1) {
-          // deal third card
+          // deal third card to player
           const [playerCard, ...shoe] = game.shoe;
           const playerHand = [...game.playerHands[0], playerCard];
-          if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
+          return {
+            ...game,
+            shoe,
+            playerHands: [playerHand],
+          };
+        } else if (game.playerHands[0].length === 2 && game.dealerHand.length === 1) {
+          // deal fourth card to dealer
+          const [dealerCard, ...shoe] = game.shoe;
+          const dealerHand = [...game.dealerHand, { ...dealerCard, faceDown: true }];
+
+          // dealer peeks
+          if (rules.dealerPeeks) {
+            if (handValue(dealerHand.map(assoc('faceDown', false))) === 'blackjack') {
+              return {
+                ...game,
+                shoe,
+                dealerHand: dealerHand.map(assoc('faceDown', false)),
+                state: 'game-over' as const,
+              };
+            }
+          }
+
+          if (handValue(game.playerHands[0]) === 21 || handValue(game.playerHands[0]) === 'blackjack') {
             return {
               ...game,
               shoe,
-              playerHands: [playerHand],
+              dealerHand,
               state: 'dealer-turn' as const, // dealer could still have 21/blackjack
             };
           }
           return {
             ...game,
             shoe,
-            playerHands: [playerHand],
+            dealerHand,
             state: 'player-turn' as const,
           };
         }
@@ -308,8 +362,16 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
         };
       } else {
         // dealer hits
-        const [dealerCard, ...shoe] = game.shoe;
-        const dealerHand = [...game.dealerHand, dealerCard];
+        const { dealerHand, shoe } = (() => {
+          if (game.dealerHand[1].faceDown) {
+            const dealerHand = [game.dealerHand[0], { ...game.dealerHand[1], faceDown: false }];
+            return { dealerHand, shoe: game.shoe };
+          } else {
+            const [dealerCard, ...shoe] = game.shoe;
+            const dealerHand = [...game.dealerHand, dealerCard];
+            return { dealerHand, shoe };
+          }
+        })();
         if (game.playerHands.every((playerHand) => handValue(playerHand) === 'blackjack')) {
           // dealer now has 2 cards and is up against all blackjacks
           // either push or player wins, no need for dealer to keep hitting
@@ -334,13 +396,54 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
     })
     .exhaustive();
 };
+
+export const determineAllowedActions = (game: BlackJackState): PlayerAction[] => {
+  if (game.state !== 'player-turn') throw new Error('Not player turn');
+
+  const playerHand = game.playerHands[game.actionableHandIndex];
+  const playerHandValue = handValue(playerHand);
+
+  const isPair = playerHand.length === 2 && cardValue(playerHand[0]) === cardValue(playerHand[1]);
+  const canSplitAces = (() => {
+    const firstCards = game.playerHands.map((hand) => hand[0]);
+    const numAcesSplit = aperture(2, firstCards).filter(
+      ([left, right]) => left.faceValue === FaceValue.Ace && right.faceValue === FaceValue.Ace,
+    ).length;
+    return match(rules.splitAces)
+      .with(0, () => false)
+      .with(1, () => numAcesSplit === 0)
+      .with(2, () => numAcesSplit <= 1)
+      .with(3, () => numAcesSplit <= 2)
+      .exhaustive();
+  })();
+  const maxSplitCondition = game.playerHands.length < rules.maxHandsAfterSplit;
+  const canSplit = isPair && maxSplitCondition && (playerHand[0].faceValue === FaceValue.Ace ? canSplitAces : true);
+
+  const canDoubleOnCurrentHand = match(rules.doubleOn)
+    .with('any', () => true)
+    .with('hard-9-11', () => [9, 10, 11].includes(playerHandValue as number))
+    .with('hard-10-11', () => [10, 11].includes(playerHandValue as number))
+    .exhaustive();
+  const canDouble =
+    playerHand.length === 2 &&
+    canDoubleOnCurrentHand &&
+    (rules.doubleAfterSplit ? true : game.actionableHandIndex === 0);
+
+  return [
+    PlayerAction.Hit,
+    PlayerAction.Stand,
+    canDouble && PlayerAction.Double,
+    canSplit && PlayerAction.Split,
+  ].filter(Boolean);
+};
+
 export const printGameState = (game: BlackJackState) => {
   console.clear();
   console.log('');
   console.log(
     'Dealer Hand:',
     `(${formatHandValue(handValue(game.dealerHand))})`,
-    game.dealerHand.map((c) => c.faceValue),
+    game.dealerHand.map((c) => (c.faceDown ? '?' : c.faceValue)),
     bust(game.dealerHand) ? red('BUST') : '',
   );
   game.playerHands.forEach((playerHand, i) => {
@@ -402,7 +505,7 @@ const basicStrategyTable = {
     8: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
     9: ['H', 'D', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
     10: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
-    11: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
+    11: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'D'],
     12: ['H', 'H', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
     13: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
     14: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
@@ -412,7 +515,7 @@ const basicStrategyTable = {
     18: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
     19: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
     20: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
-  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+  } as Record<number, ('H' | 'S' | 'D')[]>,
   playerSoftTotals: {
     //    2    3    4    5    6    7    8    9    10   A
     11: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
@@ -422,23 +525,23 @@ const basicStrategyTable = {
     15: ['H', 'H', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
     16: ['H', 'H', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
     17: ['H', 'D', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
-    18: ['S', 'D', 'D', 'D', 'D', 'S', 'S', 'H', 'H', 'H'], // TODO: double if allowed
+    18: ['S', 'D/S', 'D/S', 'D/S', 'D/S', 'S', 'S', 'H', 'H', 'H'],
     19: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
     20: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
-  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+  } as Record<number, ('H' | 'S' | 'D' | 'D/S')[]>,
   playerPairs: {
     //   2    3    4    5    6    7    8    9    10   A
-    2: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
-    3: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
-    4: ['H', 'H', 'H', 'P', 'P', 'H', 'H', 'H', 'H', 'H'],
+    2: ['P/H', 'P/H', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
+    3: ['P/H', 'P/H', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
+    4: ['H', 'H', 'H', 'P/H', 'P/H', 'H', 'H', 'H', 'H', 'H'],
     5: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
-    6: ['P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H', 'H'],
+    6: ['P/H', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H', 'H'],
     7: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
     8: ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
     9: ['P', 'P', 'P', 'P', 'P', 'S', 'P', 'P', 'S', 'S'],
     10: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
     1: ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
-  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+  } as Record<number, ('H' | 'S' | 'D' | 'P' | 'P/H')[]>,
 };
 export const basicStrategy = (game: BlackJackState): PlayerAction => {
   if (game.state !== 'player-turn') throw new Error('Not player turn');
@@ -446,8 +549,11 @@ export const basicStrategy = (game: BlackJackState): PlayerAction => {
   const playerHand = game.playerHands[game.actionableHandIndex];
   const playerHandValue = handValue(playerHand);
   const dealerUpcardValue = cardValue(game.dealerHand[0], { withAceAs11: true });
+  const playerHasPair = playerHand.length === 2 && cardValue(playerHand[0]) === cardValue(playerHand[1]);
+
+  const allowedActions = determineAllowedActions(game);
   const playerActionCode = (() => {
-    if (playerHand.length === 2 && cardValue(playerHand[0]) === cardValue(playerHand[1])) {
+    if (playerHasPair && allowedActions.includes(PlayerAction.Split)) {
       return basicStrategyTable.playerPairs[cardValue(playerHand[0])][dealerUpcardValue - 2];
     } else if (typeof playerHandValue === 'number') {
       return basicStrategyTable.playerHardTotals[playerHandValue][dealerUpcardValue - 2];
@@ -458,7 +564,9 @@ export const basicStrategy = (game: BlackJackState): PlayerAction => {
   return match(playerActionCode)
     .with('H', () => PlayerAction.Hit)
     .with('S', () => PlayerAction.Stand)
-    .with('D', () => PlayerAction.Double)
+    .with('D', () => (allowedActions.includes(PlayerAction.Double) ? PlayerAction.Double : PlayerAction.Hit))
+    .with('D/S', () => (allowedActions.includes(PlayerAction.Double) ? PlayerAction.Double : PlayerAction.Stand))
     .with('P', () => PlayerAction.Split)
+    .with('P/H', () => (rules.doubleAfterSplit ? PlayerAction.Split : PlayerAction.Hit))
     .exhaustive();
 };

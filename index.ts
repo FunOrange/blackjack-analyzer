@@ -3,6 +3,7 @@ import {
   BlackJackState,
   PlayerAction,
   basicStrategy,
+  determineAllowedActions,
   determinePlayerHandOutcomes,
   formatHandValue,
   handValue,
@@ -96,17 +97,21 @@ const manualPlay = async () => {
     while (game.state !== 'game-over') {
       if (game.state === 'player-turn') {
         // get the next action from the user
+        const allowedActions = determineAllowedActions(game);
         let userInput: string = '';
-        while (!['1', '2', '3', '4'].includes(userInput)) {
+        const validInputs = [
+          '1',
+          '2',
+          ...(allowedActions.includes(PlayerAction.Double) ? ['3'] : []),
+          ...(allowedActions.includes(PlayerAction.Split) ? ['4'] : []),
+        ];
+        while (!validInputs.includes(userInput)) {
           console.log('1: Hit');
           console.log('2: Stand');
-          console.log('3: Double');
-          console.log('4: Split');
+          if (allowedActions.includes(PlayerAction.Double)) console.log('3: Double');
+          if (allowedActions.includes(PlayerAction.Split)) console.log('4: Split');
           userInput = prompt('Enter your action: ');
-          if (userInput === 'q') {
-            process.exit(0);
-          }
-          if (!['1', '2', '3', '4'].includes(userInput)) {
+          if (!validInputs.includes(userInput)) {
             console.log('Invalid input.');
           }
         }
@@ -143,16 +148,38 @@ const manualPlay = async () => {
 };
 
 const monteCarloSimulation = () => {
-  const numSimulations = 100000;
+  const numRounds = 400_000;
   const flatBet = 1;
-  const initialBankroll = 100;
+  const initialBankroll = 10000;
   let bankroll = initialBankroll;
-  let wins = 0;
-  let losses = 0;
-  let pushes = 0;
+  let bankrollMovementDistribution: Record<number, number> = {};
+  console.log(`Starting bankroll: $${bankroll}, betting at $${flatBet} for ${numRounds.toLocaleString()} rounds.`);
   console.log('running...');
   const startTime = Date.now();
-  for (let i = 0; i < numSimulations; i++) {
+
+  const printStats = (numSimulations: number) => {
+    console.log(`Starting bankroll: $${initialBankroll}`);
+    const net = bankroll - initialBankroll;
+    console.log(`Bankroll: $${bankroll}`, net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${Math.abs(net)}`) : '');
+    console.log('Loss/earnings distribution:');
+    for (const [movement, count] of (Object.entries(bankrollMovementDistribution) as any as [number, number][]).sort(
+      ([dollars1], [dollars2]) => dollars1 - dollars2,
+    )) {
+      if (movement > 0) {
+        console.log(`${green('+$' + Math.abs(movement).toLocaleString())}: ${count}`);
+      } else if (movement < 0) {
+        console.log(`${red('-$' + Math.abs(movement).toLocaleString())}: ${count}`);
+      } else if (movement === 0) {
+        console.log(`$0: ${count}`);
+      }
+    }
+    const houseEdgePercent = ((initialBankroll - bankroll) / numSimulations / flatBet) * 100;
+    console.log(`House edge: ${houseEdgePercent.toFixed(2)}%`);
+    console.log(`Simulated ${numSimulations.toLocaleString()} rounds in ${(Date.now() - startTime) / 1000} seconds`);
+  };
+
+  for (let i = 0; i < numRounds; i++) {
+    const preroundBankroll = bankroll;
     bankroll -= flatBet;
     let game = initState(flatBet);
 
@@ -160,9 +187,9 @@ const monteCarloSimulation = () => {
       if (game.state === 'player-turn') {
         const playerAction = basicStrategy(game);
         if (playerAction === PlayerAction.Double) {
-          bankroll -= game.startingBet;
+          bankroll -= flatBet;
         } else if (playerAction === PlayerAction.Split) {
-          bankroll -= game.startingBet;
+          bankroll -= flatBet;
         }
         game = nextState(game, playerAction);
       } else {
@@ -171,28 +198,22 @@ const monteCarloSimulation = () => {
     }
     const playerHandOutcomes = determinePlayerHandOutcomes(game);
     for (const [bet, outcome] of zip(game.bets, playerHandOutcomes)) {
-      const result = outcome.result;
-      if (result === 'player-win') {
-        bankroll += bet * 2;
-        wins++;
-      }
-      if (result === 'player-loss') {
-        losses++;
-      }
-      if (result === 'push') {
-        bankroll += bet;
-        pushes++;
-      }
+      if (outcome.result === 'player-win') {
+        if (outcome.reason !== 'blackjack') bankroll += bet + bet;
+        if (outcome.reason === 'blackjack') bankroll += bet + rules.blackjackPayout * bet;
+      } else if (outcome.result === 'push') bankroll += bet;
+    }
+    const net = bankroll - preroundBankroll;
+    bankrollMovementDistribution[net] = (bankrollMovementDistribution[net] || 0) + 1;
+
+    if (i % 1000 === 0) {
+      console.clear();
+      printStats(i);
     }
   }
-
-  console.log(`Wins: ${wins}, Losses: ${losses}, Pushes: ${pushes}`);
-  console.log(`Bankroll: $${bankroll}`);
-  const houseEdgePercent = ((initialBankroll - bankroll) / numSimulations / flatBet) * 100;
-  console.log(`House edge: ${houseEdgePercent.toFixed(2)}%`);
-  console.log(`${numSimulations} simulations in ${(Date.now() - startTime) / 1000} seconds`);
+  printStats(numRounds);
 };
 
 // autoPlay();
-monteCarloSimulation();
-// manualPlay();
+// monteCarloSimulation();
+manualPlay();
