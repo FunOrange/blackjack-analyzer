@@ -10,13 +10,10 @@ import {
   nextState,
   printState,
 } from './blackjack';
-import { assoc, zip } from 'ramda';
+import { zip } from 'ramda';
+import { green, red, yellow } from './terminal';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const green = (str: string) => `\x1b[32m${str}\x1b[0m`;
-const red = (str: string) => `\x1b[31m${str}\x1b[0m`;
-const yellow = (str: string) => `\x1b[33m${str}\x1b[0m`;
 
 const printGameResult = (game: BlackJackState): { earnings: number } => {
   const playerHandOutcomes = determinePlayerHandOutcomes(game);
@@ -88,6 +85,7 @@ const manualPlay = async () => {
   const flatBet = 100;
   let bankroll = 1000;
   while (true) {
+    const startingBalance = bankroll;
     bankroll -= flatBet;
     let game = initState(flatBet);
     printState(game);
@@ -95,17 +93,25 @@ const manualPlay = async () => {
     while (game.state !== 'game-over') {
       if (game.state === 'player-turn') {
         // get the next action from the user
-        let userInput: string;
-        while (!['s', 'h', 'd'].includes(userInput)) {
-          userInput = prompt('Enter your action (h for hit, s for stand, d for double): ');
-          if (!['s', 'h', 'd'].includes(userInput)) {
-            console.log('Invalid input. Please enter h, s, or d.');
+        let userInput: string = '';
+        while (!['1', '2', '3', '4'].includes(userInput)) {
+          console.log('1: Hit');
+          console.log('2: Stand');
+          console.log('3: Double');
+          console.log('4: Split');
+          userInput = prompt('Enter your action: ');
+          if (userInput === 'q') {
+            process.exit(0);
+          }
+          if (!['1', '2', '3', '4'].includes(userInput)) {
+            console.log('Invalid input.');
           }
         }
-        const playerAction = match(userInput as 's' | 'h' | 'd')
-          .with('s', () => PlayerAction.Stand)
-          .with('h', () => PlayerAction.Hit)
-          .with('d', () => PlayerAction.Double)
+        const playerAction = match(userInput as '1' | '2' | '3' | '4')
+          .with('1', () => PlayerAction.Hit)
+          .with('2', () => PlayerAction.Stand)
+          .with('3', () => PlayerAction.Double)
+          .with('4', () => PlayerAction.Split)
           .exhaustive();
         if (playerAction === PlayerAction.Double) {
           bankroll -= game.startingBet;
@@ -113,15 +119,15 @@ const manualPlay = async () => {
         game = nextState(game, playerAction);
       } else {
         game = nextState(game);
+        await sleep(500);
       }
       printState(game);
     }
     const { earnings } = printGameResult(game);
     bankroll += earnings;
-    const net = earnings - flatBet;
-    console.log(`Bankroll: $${bankroll} ${net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${net}`) : ''}`);
-    // press any key to play again
-    console.log('Press any key to play again...');
+    const net = bankroll - startingBalance;
+    console.log(`Bankroll: $${bankroll} ${net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${Math.abs(net)}`) : ''}`);
+    console.log('Press Enter to play again...');
     await new Promise<void>((resolve) => {
       const listener = () => {
         process.stdin.off('data', listener);
@@ -184,6 +190,6 @@ const monteCarloSimulation = () => {
   console.log(`${numSimulations} simulations in ${(Date.now() - startTime) / 1000} seconds`);
 };
 
-autoPlay();
-monteCarloSimulation();
+// autoPlay();
+// monteCarloSimulation();
 manualPlay();

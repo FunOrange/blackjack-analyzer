@@ -9,6 +9,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/prompt-sync": "^4.2.3",
+    "prompt-sync": "^4.2.0",
     "ramda": "^0.30.0",
     "ts-pattern": "^5.1.2"
   },

@@ -1,5 +1,6 @@
-import { assoc, isEmpty, sum } from 'ramda';
+import { assoc, sum } from 'ramda';
 import { Pattern, match } from 'ts-pattern';
+import { red, yellow } from './terminal';
 
 class UnreachableError extends Error {
   constructor(message = 'Unreachable code has been reached') {
@@ -42,15 +43,17 @@ export enum PlayerAction {
   Split = 'split',
 }
 
-export const defaultRuleset = {
+export const rules = {
   hitSoft17: false,
   doubleAfterSplit: true,
   resplitAces: false,
   blackjackPayout: 1.5,
   dealerPeeks: true,
-  aceAndTenCountsAsBlackjack: true,
+  aceAndTenCountsAsBlackjack: false,
+  resplitAce: false,
+  dealerStandsOnAll17: true,
 };
-type BlackjackRuleset = typeof defaultRuleset;
+export type BlackjackRuleset = typeof rules;
 
 export const cardValue = (card: Card) =>
   match(card)
@@ -72,11 +75,11 @@ export const cardValue = (card: Card) =>
 export const handValue = (hand: Card[]): number | 'blackjack' | { soft: { low: number; high: number } } => {
   if (hand.length === 2) {
     const [{ faceValue: card1 }, { faceValue: card2 }] = hand;
-    if (card1 === FaceValue.Ace && card2 === FaceValue.Ten) return 'blackjack'; // TODO: ruleset
+    if (rules.aceAndTenCountsAsBlackjack && card1 === FaceValue.Ace && card2 === FaceValue.Ten) return 'blackjack';
     if (card1 === FaceValue.Ace && card2 === FaceValue.Jack) return 'blackjack';
     if (card1 === FaceValue.Ace && card2 === FaceValue.Queen) return 'blackjack';
     if (card1 === FaceValue.Ace && card2 === FaceValue.King) return 'blackjack';
-    if (card1 === FaceValue.Ace && card2 === FaceValue.Ten) return 'blackjack'; // TODO: ruleset
+    if (rules.aceAndTenCountsAsBlackjack && card1 === FaceValue.Ten && card2 === FaceValue.Ace) return 'blackjack';
     if (card1 === FaceValue.Jack && card2 === FaceValue.Ace) return 'blackjack';
     if (card1 === FaceValue.Queen && card2 === FaceValue.Ace) return 'blackjack';
     if (card1 === FaceValue.King && card2 === FaceValue.Ace) return 'blackjack';
@@ -91,6 +94,10 @@ export const handValue = (hand: Card[]): number | 'blackjack' | { soft: { low: n
   } else {
     return low;
   }
+};
+const bust = (hand: Card[]) => {
+  const value = handValue(hand);
+  return typeof value === 'number' && value > 21;
 };
 export const formatHandValue = (value: ReturnType<typeof handValue>) => {
   if (typeof value === 'number') {
@@ -117,7 +124,6 @@ export interface BlackJackState {
   state: 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
   startingBet: number;
   bets: number[]; // normally one value but can be multiple for splits
-  ruleset: BlackjackRuleset;
 }
 
 export const initState = (startingBet: number): BlackJackState => {
@@ -133,43 +139,76 @@ export const initState = (startingBet: number): BlackJackState => {
     state: 'dealing',
     startingBet,
     bets: [startingBet],
-    ruleset: defaultRuleset,
   };
 };
 
-export const nextState = (game: BlackJackState, playerAction?: PlayerAction): BlackJackState =>
-  match(game.state)
+const getNextActionableHandIndex = (game: BlackJackState) => {
+  const index = game.playerHands.findIndex((hand, i) => i > game.actionableHandIndex && hand.length === 1);
+  return index !== -1 ? index : game.actionableHandIndex;
+};
+
+export const nextState = (game: BlackJackState, playerAction?: PlayerAction): BlackJackState => {
+  const playerHandFinished = (playerHand: Card[]) => {
+    const playerHandValue = handValue(playerHand);
+    const bust = typeof playerHandValue === 'number' && playerHandValue > 21;
+    const twentyOne = typeof playerHandValue === 'number' && playerHandValue === 21;
+    const softTwentyOne = typeof playerHandValue === 'object' && playerHandValue.soft.high === 21;
+    const blackjack = playerHandValue === 'blackjack';
+    return bust || twentyOne || softTwentyOne || blackjack;
+  };
+  return match(game.state)
     .with('dealing', () => {
-      if (game.playerHands[0].length === 0) {
-        const [playerCard, ...shoe] = game.shoe;
-        return {
-          ...game,
-          shoe,
-          playerHands: [[playerCard]],
-        };
-      } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 0) {
-        const [dealerCard, ...shoe] = game.shoe;
-        const dealerHand = [dealerCard];
-        return {
-          ...game,
-          shoe,
-          dealerHand,
-        };
-      } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 1) {
-        const [playerCard, ...shoe] = game.shoe;
-        const playerHand = [...game.playerHands[0], playerCard];
-        if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
+      if (game.playerHands.length === 1) {
+        if (game.playerHands[0].length === 0) {
+          // deal first card
+          const [playerCard, ...shoe] = game.shoe;
+          return {
+            ...game,
+            shoe,
+            playerHands: [[playerCard]],
+          };
+        } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 0) {
+          // deal second card
+          const [dealerCard, ...shoe] = game.shoe;
+          const dealerHand = [dealerCard];
+          return {
+            ...game,
+            shoe,
+            dealerHand,
+          };
+        } else if (game.playerHands[0].length === 1 && game.dealerHand.length === 1) {
+          // deal third card
+          const [playerCard, ...shoe] = game.shoe;
+          const playerHand = [...game.playerHands[0], playerCard];
+          if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
+            return {
+              ...game,
+              shoe,
+              playerHands: [playerHand],
+              state: 'dealer-turn' as const, // dealer could still have 21/blackjack
+            };
+          }
           return {
             ...game,
             shoe,
             playerHands: [playerHand],
-            state: 'dealer-turn' as const, // dealer could still have 21/blackjack
+            state: 'player-turn' as const,
           };
         }
+      } else if (game.playerHands.length > 1) {
+        // player just split, deal 1 card
+        // note: bust impossible
+        const [playerCard, ...shoe] = game.shoe;
+        const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
+        const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
+        const actionableHandIndex = playerHandFinished(playerHand)
+          ? getNextActionableHandIndex(game)
+          : game.actionableHandIndex;
         return {
           ...game,
           shoe,
-          playerHands: [playerHand],
+          playerHands,
+          actionableHandIndex,
           state: 'player-turn' as const,
         };
       }
@@ -181,64 +220,69 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
           const [playerCard, ...shoe] = game.shoe;
           const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
           const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
-          const hasMoreActionableHands =
-            game.actionableHandIndex < game.playerHands.filter((hand) => isEmpty(hand)).length - 1;
-          if (handValue(playerHand) === 21 || handValue(playerHand) === 'blackjack') {
-            // player 21/blackjack
-            const state = 'dealer-turn' as const; // dealer could still have 21/blackjack
-            return {
-              ...game,
-              shoe,
-              playerHands,
-              actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
-              state: hasMoreActionableHands ? ('player-turn' as const) : state,
-            };
-          }
-          if ((handValue(playerHand) as number) > 21) {
-            // player busts
-            const state = 'game-over' as const;
-            return {
-              ...game,
-              shoe,
-              playerHands,
-              actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
-              state: hasMoreActionableHands ? ('player-turn' as const) : state,
-            };
-          }
+          const handFinished = playerHandFinished(playerHand);
+          const actionableHandIndex = handFinished ? getNextActionableHandIndex(game) : game.actionableHandIndex;
+          const moreHandsToPlay = actionableHandIndex !== game.actionableHandIndex;
+          const state = playerHands.every(bust)
+            ? ('game-over' as const)
+            : match({ handFinished, moreHandsToPlay })
+                .with({ handFinished: false, moreHandsToPlay: false }, () => 'player-turn' as const)
+                .with({ handFinished: false, moreHandsToPlay: true }, () => 'player-turn' as const)
+                .with({ handFinished: true, moreHandsToPlay: false }, () => 'dealer-turn' as const)
+                .with({ handFinished: true, moreHandsToPlay: true }, () => 'player-turn' as const)
+                .exhaustive();
           return {
             ...game,
             shoe,
             playerHands,
+            actionableHandIndex,
+            state,
           };
         })
-        .with(PlayerAction.Stand, () => ({
-          ...game,
-          state: 'dealer-turn' as const,
-        }))
+        .with(PlayerAction.Stand, () => {
+          const actionableHandIndex = getNextActionableHandIndex(game);
+          const moreHandsToPlay = actionableHandIndex !== game.actionableHandIndex;
+          if (moreHandsToPlay) {
+            return {
+              ...game,
+              actionableHandIndex,
+              state: 'player-turn' as const,
+            };
+          } else {
+            return {
+              ...game,
+              state: 'dealer-turn' as const,
+            };
+          }
+        })
         .with(PlayerAction.Double, () => {
           const [playerCard, ...shoe] = game.shoe;
           const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
           const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
-          const playerHandValue = handValue(playerHand);
           const bet = game.bets[game.actionableHandIndex] + game.startingBet;
           const bets = assoc(game.actionableHandIndex, bet, game.bets);
-          const state =
-            typeof playerHandValue === 'number' && playerHandValue > 21
-              ? ('game-over' as const) // player bust
+          const handFinished = true;
+          const actionableHandIndex = handFinished ? getNextActionableHandIndex(game) : game.actionableHandIndex;
+          const moreHandsToPlay = actionableHandIndex !== game.actionableHandIndex;
+          const state = playerHands.every(bust)
+            ? ('game-over' as const)
+            : moreHandsToPlay
+              ? ('player-turn' as const)
               : ('dealer-turn' as const);
-          const hasMoreActionableHands =
-            game.actionableHandIndex < game.playerHands.filter((hand) => isEmpty(hand)).length - 1;
           return {
             ...game,
             shoe,
             playerHands,
             bets,
-            actionableHandIndex: game.actionableHandIndex + (hasMoreActionableHands ? 1 : 0),
-            state: hasMoreActionableHands ? ('player-turn' as const) : state,
+            actionableHandIndex,
+            state,
           };
         })
         .with(PlayerAction.Split, () => {
-          return { ...game };
+          const [card1, card2] = game.playerHands[game.actionableHandIndex];
+          const playerHands = assoc(game.actionableHandIndex, [[card1], [card2]], game.playerHands).flat() as Card[][];
+          const bets = game.bets.flatMap((bet) => [bet, bet]);
+          return { ...game, playerHands, bets, state: 'dealing' as const };
         })
         .exhaustive(),
     )
@@ -248,11 +292,9 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
         return (
           dealerHandValue === 'blackjack' ||
           (typeof dealerHandValue === 'number' && dealerHandValue >= 17) ||
-          (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 17) || // TODO: ruleset
-          (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 18) ||
-          (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 19) ||
-          (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 20) ||
-          (typeof dealerHandValue === 'object' && dealerHandValue.soft.high === 21)
+          (rules.dealerStandsOnAll17 &&
+            typeof dealerHandValue === 'object' &&
+            [17, 18, 19, 20, 21].includes(dealerHandValue.soft.high))
         );
       };
       if (dealerShouldStand(game.dealerHand)) {
@@ -288,7 +330,7 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
       throw new UnreachableError();
     })
     .exhaustive();
-
+};
 export const printState = (game: BlackJackState) => {
   console.clear();
   console.log('');
@@ -296,14 +338,20 @@ export const printState = (game: BlackJackState) => {
     'Dealer Hand:',
     `(${formatHandValue(handValue(game.dealerHand))})`,
     game.dealerHand.map((c) => c.faceValue),
+    bust(game.dealerHand) ? red('BUST') : '',
   );
-  for (const playerHand of game.playerHands) {
+  game.playerHands.forEach((playerHand, i) => {
     console.log(
       'Player Hand:',
       `(${formatHandValue(handValue(playerHand))})`,
       playerHand.map((c) => c.faceValue),
+      game.state === 'player-turn' && i === game.actionableHandIndex
+        ? yellow('←')
+        : bust(playerHand)
+          ? red('BUST')
+          : '',
     );
-  }
+  });
 };
 
 export const determinePlayerHandOutcomes = (
