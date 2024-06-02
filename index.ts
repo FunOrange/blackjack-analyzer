@@ -2,6 +2,7 @@ import { match } from 'ts-pattern';
 import {
   BlackJackState,
   PlayerAction,
+  acesSplit,
   basicStrategy,
   determineAllowedActions,
   determinePlayerHandOutcomes,
@@ -14,6 +15,7 @@ import {
 } from './blackjack';
 import { zip } from 'ramda';
 import { green, red, yellow } from './terminal';
+import { writeFile } from 'fs';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,10 +63,11 @@ const autoPlay = async () => {
       if (game.state === 'player-turn') {
         const playerAction = basicStrategy(game);
         const playerHand = game.playerHands[game.actionableHandIndex];
+        const playerHandValue = formatHandValue(handValue(playerHand, acesSplit(game.playerHands)));
         log =
           playerAction === PlayerAction.Stand
-            ? `Player stands on ${formatHandValue(handValue(playerHand))}`
-            : `Player hits on ${formatHandValue(handValue(playerHand))}`;
+            ? `Player stands on ${playerHandValue}`
+            : `Player hits on ${playerHandValue}`;
         game = nextState(game, playerAction);
         printGameState(game);
       } else {
@@ -106,7 +109,7 @@ const manualPlay = async () => {
           ...(allowedActions.includes(PlayerAction.Split) ? ['4'] : []),
         ];
         while (!validInputs.includes(userInput)) {
-          console.log('1: Hit');
+          if (allowedActions.includes(PlayerAction.Hit)) console.log('1: Hit');
           console.log('2: Stand');
           if (allowedActions.includes(PlayerAction.Double)) console.log('3: Double');
           if (allowedActions.includes(PlayerAction.Split)) console.log('4: Split');
@@ -148,38 +151,42 @@ const manualPlay = async () => {
 };
 
 const monteCarloSimulation = () => {
-  const numRounds = 40_000;
   const flatBet = 1;
   const initialBankroll = 10000;
   let bankroll = initialBankroll;
   let bankrollMovementDistribution: Record<number, number> = {};
-  console.log(`Starting bankroll: $${bankroll}, betting at $${flatBet} for ${numRounds.toLocaleString()} rounds.`);
-  console.log('running...');
   const startTime = Date.now();
-  // let savedStates: BlackJackState[] = [];
+  let savedStates: Record<number, any> = {};
 
-  const printStats = (numSimulations: number) => {
-    console.log(`Starting bankroll: $${initialBankroll}`);
+  const printStats = (numRounds: number) => {
+    console.log(`Starting bankroll: $${initialBankroll.toLocaleString()}`);
     const net = bankroll - initialBankroll;
-    console.log(`Bankroll: $${bankroll}`, net > 0 ? green(`+$${net}`) : net < 0 ? red(`-$${Math.abs(net)}`) : '');
+    console.log(
+      `Bankroll: $${bankroll.toLocaleString()}`,
+      net > 0 ? green(`+$${net.toLocaleString()}`) : net < 0 ? red(`-$${Math.abs(net).toLocaleString()}`) : '',
+    );
     console.log('Loss/earnings distribution:');
-    for (const [movement, count] of (Object.entries(bankrollMovementDistribution) as any as [number, number][]).sort(
-      ([dollars1], [dollars2]) => dollars1 - dollars2,
-    )) {
+    for (const [movement, count] of Object.entries(bankrollMovementDistribution)
+      .map(([dollars, count]) => [Number(dollars), count])
+      .sort(([dollars1], [dollars2]) => dollars1 - dollars2)) {
+      const percent = ((count / numRounds) * 100).toFixed(2) + '%';
+      const strCount = ' (' + count.toLocaleString() + ')';
       if (movement > 0) {
-        console.log(`${green('+$' + Math.abs(movement).toLocaleString())}: ${count}`);
+        console.log(
+          green(`${'+$' + Math.abs(movement).toLocaleString()}: `.padStart(10)) + percent.padEnd(6) + strCount,
+        );
       } else if (movement < 0) {
-        console.log(`${red('-$' + Math.abs(movement).toLocaleString())}: ${count}`);
+        console.log(red(`${'-$' + Math.abs(movement).toLocaleString()}: `.padStart(10)) + percent.padEnd(6) + strCount);
       } else if (movement === 0) {
-        console.log(`$0: ${count}`);
+        console.log(`$0: `.padStart(10) + percent.padEnd(6) + strCount);
       }
     }
-    const houseEdgePercent = ((initialBankroll - bankroll) / numSimulations / flatBet) * 100;
+    const houseEdgePercent = ((initialBankroll - bankroll) / numRounds / flatBet) * 100;
     console.log(`House edge: ${houseEdgePercent.toFixed(2)}%`);
-    console.log(`Simulated ${numSimulations.toLocaleString()} rounds in ${(Date.now() - startTime) / 1000} seconds`);
+    console.log(`Simulated ${numRounds.toLocaleString()} rounds in ${(Date.now() - startTime) / 1000} seconds`);
   };
 
-  for (let i = 0; i < numRounds; i++) {
+  for (let i = 0; true; i++) {
     const preroundBankroll = bankroll;
     bankroll -= flatBet;
     let game = initState(flatBet);
@@ -206,19 +213,25 @@ const monteCarloSimulation = () => {
     }
     const net = bankroll - preroundBankroll;
     bankrollMovementDistribution[net] = (bankrollMovementDistribution[net] || 0) + 1;
-    // if (net >= 10) {
-    //   savedStates.push(game);
-    // }
-
+    if (!savedStates[net]) {
+      savedStates[net] = {
+        ...game,
+        shoe: undefined,
+        dealerHand: game.dealerHand.map((card) => card.faceValue).join(', '),
+        playerHands: game.playerHands.map((hand) => hand.map((card) => card.faceValue).join(', ')),
+      };
+      writeFile('savedStates.json', JSON.stringify(savedStates, null, 2), (err) => {});
+    }
     if (i % 1000 === 0) {
       console.clear();
       printStats(i);
     }
   }
-  printStats(numRounds);
-  // savedStates.forEach(printGameState);
 };
 
-// autoPlay();
-monteCarloSimulation();
-// manualPlay();
+console.log('Welcome to Blackjack!');
+console.log('Enter "auto" to run the auto-play simulation, or "monte" for Monte Carlo.');
+const input = prompt('Otherwise press enter to start a normal game of Blackjack:');
+if (input === 'auto') autoPlay();
+else if (input === 'monte') monteCarloSimulation();
+else manualPlay();

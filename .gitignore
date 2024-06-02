@@ -38,3 +38,6 @@ entity-name-mapping.json
 dist
 *.tsbuildinfo
 next-env.d.ts
+
+savedStates.json
+errorState.txt
