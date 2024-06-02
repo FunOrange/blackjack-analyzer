@@ -148,7 +148,7 @@ const manualPlay = async () => {
 };
 
 const monteCarloSimulation = () => {
-  const numRounds = 400_000;
+  const numRounds = 40_000;
   const flatBet = 1;
   const initialBankroll = 10000;
   let bankroll = initialBankroll;
@@ -156,6 +156,7 @@ const monteCarloSimulation = () => {
   console.log(`Starting bankroll: $${bankroll}, betting at $${flatBet} for ${numRounds.toLocaleString()} rounds.`);
   console.log('running...');
   const startTime = Date.now();
+  // let savedStates: BlackJackState[] = [];
 
   const printStats = (numSimulations: number) => {
     console.log(`Starting bankroll: $${initialBankroll}`);
@@ -205,6 +206,9 @@ const monteCarloSimulation = () => {
     }
     const net = bankroll - preroundBankroll;
     bankrollMovementDistribution[net] = (bankrollMovementDistribution[net] || 0) + 1;
+    // if (net >= 10) {
+    //   savedStates.push(game);
+    // }
 
     if (i % 1000 === 0) {
       console.clear();
@@ -212,8 +216,9 @@ const monteCarloSimulation = () => {
     }
   }
   printStats(numRounds);
+  // savedStates.forEach(printGameState);
 };
 
 // autoPlay();
-// monteCarloSimulation();
-manualPlay();
+monteCarloSimulation();
+// manualPlay();

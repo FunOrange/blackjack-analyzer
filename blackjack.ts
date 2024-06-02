@@ -152,19 +152,7 @@ export const initState = (startingBet: number): BlackJackState => {
     .flat()
     .sort(() => Math.random() - 0.5);
   return {
-    shoe: [
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      { suit: Suit.Hearts, faceValue: FaceValue.Ace },
-      ...shoe,
-    ],
+    shoe,
     playerHands: [[]],
     actionableHandIndex: 0,
     dealerHand: [],
@@ -447,16 +435,15 @@ export const printGameState = (game: BlackJackState) => {
     bust(game.dealerHand) ? red('BUST') : '',
   );
   game.playerHands.forEach((playerHand, i) => {
-    console.log(
+    const args = [
       'Player Hand:',
       `(${formatHandValue(handValue(playerHand))})`,
       playerHand.map((c) => c.faceValue),
-      game.state === 'player-turn' && i === game.actionableHandIndex
-        ? yellow('←')
-        : bust(playerHand)
-          ? red('BUST')
-          : '',
-    );
+      game.state === 'player-turn' && i === game.actionableHandIndex && yellow('←'),
+      bust(playerHand) && red('BUST'),
+      game.bets[i] > game.startingBet && yellow('D'),
+    ].filter(Boolean);
+    console.log(...args);
   });
 };
 
