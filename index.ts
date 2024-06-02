@@ -38,7 +38,8 @@ const printGameResult = (game: BlackJackState): { earnings: number } => {
     );
   }
   for (const [bet, outcome] of zip(game.bets, playerHandOutcomes)) {
-    if (outcome.result === 'player-win') earnings += bet * 2;
+    if (outcome.result === 'player-win' && outcome.reason !== 'blackjack') earnings += bet * 2;
+    if (outcome.result === 'player-win' && outcome.reason === 'blackjack') earnings += (3 / 2) * (bet * 2);
     if (outcome.result === 'push') earnings += bet;
   }
   return { earnings };
