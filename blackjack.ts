@@ -1,4 +1,4 @@
-import { assoc, sum } from 'ramda';
+import { assoc, insertAll, pipe, remove, sum } from 'ramda';
 import { Pattern, match } from 'ts-pattern';
 import { red, yellow } from './terminal';
 
@@ -45,19 +45,19 @@ export enum PlayerAction {
 
 export const rules = {
   hitSoft17: false,
-  doubleAfterSplit: true,
-  resplitAces: false,
-  blackjackPayout: 1.5,
-  dealerPeeks: true,
-  aceAndTenCountsAsBlackjack: false,
-  resplitAce: false,
+  doubleAfterSplit: true, // TODO
+  resplitAces: false, // TODO
+  blackjackPayout: 3 / 2,
+  dealerPeeks: true, // TODO
+  aceAndTenCountsAsBlackjack: true,
+  resplitAce: false, // TODO
   dealerStandsOnAll17: true,
 };
 export type BlackjackRuleset = typeof rules;
 
-export const cardValue = (card: Card) =>
+export const cardValue = (card: Card, { withAceAs11 } = { withAceAs11: false }) =>
   match(card)
-    .with({ faceValue: FaceValue.Ace }, () => 1) // can be 11 depending on hand
+    .with({ faceValue: FaceValue.Ace }, () => (withAceAs11 ? 11 : 1)) // can be 11 depending on hand
     .with({ faceValue: FaceValue.Two }, () => 2)
     .with({ faceValue: FaceValue.Three }, () => 3)
     .with({ faceValue: FaceValue.Four }, () => 4)
@@ -280,7 +280,10 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
         })
         .with(PlayerAction.Split, () => {
           const [card1, card2] = game.playerHands[game.actionableHandIndex];
-          const playerHands = assoc(game.actionableHandIndex, [[card1], [card2]], game.playerHands).flat() as Card[][];
+          const playerHands = pipe(
+            remove(game.actionableHandIndex, 1) as any,
+            insertAll(game.actionableHandIndex, [[card1], [card2]]),
+          )(game.playerHands);
           const bets = game.bets.flatMap((bet) => [bet, bet]);
           return { ...game, playerHands, bets, state: 'dealing' as const };
         })
@@ -331,7 +334,7 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
     })
     .exhaustive();
 };
-export const printState = (game: BlackJackState) => {
+export const printGameState = (game: BlackJackState) => {
   console.clear();
   console.log('');
   console.log(
@@ -387,22 +390,75 @@ export const determinePlayerHandOutcomes = (
   });
 };
 
+const basicStrategyTable = {
+  playerHardTotals: {
+    //   2    3    4    5    6    7    8    9    10   A
+    2: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    3: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    4: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    5: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    6: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    7: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    8: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    9: ['H', 'D', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    10: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
+    11: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
+    12: ['H', 'H', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
+    13: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
+    14: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
+    15: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
+    16: ['S', 'S', 'S', 'S', 'S', 'H', 'H', 'H', 'H', 'H'],
+    17: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+    18: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+    19: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+    20: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+  playerSoftTotals: {
+    //    2    3    4    5    6    7    8    9    10   A
+    11: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    12: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H'],
+    13: ['H', 'H', 'H', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    14: ['H', 'H', 'H', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    15: ['H', 'H', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    16: ['H', 'H', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    17: ['H', 'D', 'D', 'D', 'D', 'H', 'H', 'H', 'H', 'H'],
+    18: ['S', 'D', 'D', 'D', 'D', 'S', 'S', 'H', 'H', 'H'], // TODO: double if allowed
+    19: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+    20: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+  playerPairs: {
+    //   2    3    4    5    6    7    8    9    10   A
+    2: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
+    3: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
+    4: ['H', 'H', 'H', 'P', 'P', 'H', 'H', 'H', 'H', 'H'],
+    5: ['D', 'D', 'D', 'D', 'D', 'D', 'D', 'D', 'H', 'H'],
+    6: ['P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H', 'H'],
+    7: ['P', 'P', 'P', 'P', 'P', 'P', 'H', 'H', 'H', 'H'],
+    8: ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+    9: ['P', 'P', 'P', 'P', 'P', 'S', 'P', 'P', 'S', 'S'],
+    10: ['S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S', 'S'],
+    1: ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+  } as Record<number, ('H' | 'S' | 'D' | 'P')[]>,
+};
 export const basicStrategy = (game: BlackJackState): PlayerAction => {
   if (game.state !== 'player-turn') throw new Error('Not player turn');
 
-  const playerHandValue = handValue(game.playerHands[game.actionableHandIndex]);
-  const dealerHandValue = handValue(game.dealerHand);
-  if (typeof playerHandValue === 'number') {
-    if (playerHandValue >= 17) return PlayerAction.Stand;
-    if (playerHandValue <= 11) return PlayerAction.Hit;
-    if (playerHandValue === 12) {
-      if (dealerHandValue === 2 || dealerHandValue === 3 || (dealerHandValue as number) >= 7) return PlayerAction.Hit;
-      return PlayerAction.Stand;
+  const playerHand = game.playerHands[game.actionableHandIndex];
+  const playerHandValue = handValue(playerHand);
+  const dealerUpcardValue = cardValue(game.dealerHand[0], { withAceAs11: true });
+  const playerActionCode = (() => {
+    if (playerHand.length === 2 && cardValue(playerHand[0]) === cardValue(playerHand[1])) {
+      return basicStrategyTable.playerPairs[cardValue(playerHand[0])][dealerUpcardValue - 2];
+    } else if (typeof playerHandValue === 'number') {
+      return basicStrategyTable.playerHardTotals[playerHandValue][dealerUpcardValue - 2];
+    } else if (typeof playerHandValue === 'object') {
+      return basicStrategyTable.playerSoftTotals[playerHandValue.soft.high][dealerUpcardValue - 2];
     }
-    if (playerHandValue === 13 || playerHandValue === 14 || playerHandValue === 15 || playerHandValue === 16) {
-      if ((dealerHandValue as number) <= 6) return PlayerAction.Stand;
-      return PlayerAction.Hit;
-    }
-  }
-  return PlayerAction.Hit;
+  })();
+  return match(playerActionCode)
+    .with('H', () => PlayerAction.Hit)
+    .with('S', () => PlayerAction.Stand)
+    .with('D', () => PlayerAction.Double)
+    .with('P', () => PlayerAction.Split)
+    .exhaustive();
 };

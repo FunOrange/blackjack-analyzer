@@ -8,7 +8,8 @@ import {
   handValue,
   initState,
   nextState,
-  printState,
+  printGameState,
+  rules,
 } from './blackjack';
 import { zip } from 'ramda';
 import { green, red, yellow } from './terminal';
@@ -39,7 +40,8 @@ const printGameResult = (game: BlackJackState): { earnings: number } => {
   }
   for (const [bet, outcome] of zip(game.bets, playerHandOutcomes)) {
     if (outcome.result === 'player-win' && outcome.reason !== 'blackjack') earnings += bet * 2;
-    if (outcome.result === 'player-win' && outcome.reason === 'blackjack') earnings += (3 / 2) * (bet * 2);
+    if (outcome.result === 'player-win' && outcome.reason === 'blackjack')
+      earnings += rules.blackjackPayout * (bet * 2);
     if (outcome.result === 'push') earnings += bet;
   }
   return { earnings };
@@ -51,7 +53,7 @@ const autoPlay = async () => {
   while (true) {
     bankroll -= flatBet;
     let game = initState(flatBet);
-    printState(game);
+    printGameState(game);
 
     while (game.state !== 'game-over') {
       let log = '';
@@ -63,10 +65,10 @@ const autoPlay = async () => {
             ? `Player stands on ${formatHandValue(handValue(playerHand))}`
             : `Player hits on ${formatHandValue(handValue(playerHand))}`;
         game = nextState(game, playerAction);
-        printState(game);
+        printGameState(game);
       } else {
         game = nextState(game);
-        printState(game);
+        printGameState(game);
       }
       if (log) {
         console.log(log);
@@ -89,7 +91,7 @@ const manualPlay = async () => {
     const startingBalance = bankroll;
     bankroll -= flatBet;
     let game = initState(flatBet);
-    printState(game);
+    printGameState(game);
 
     while (game.state !== 'game-over') {
       if (game.state === 'player-turn') {
@@ -122,7 +124,7 @@ const manualPlay = async () => {
         game = nextState(game);
         await sleep(500);
       }
-      printState(game);
+      printGameState(game);
     }
     const { earnings } = printGameResult(game);
     bankroll += earnings;
@@ -192,5 +194,5 @@ const monteCarloSimulation = () => {
 };
 
 // autoPlay();
-// monteCarloSimulation();
-manualPlay();
+monteCarloSimulation();
+// manualPlay();
