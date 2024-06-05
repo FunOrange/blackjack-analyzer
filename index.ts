@@ -62,7 +62,7 @@ const autoPlay = async () => {
       let log = '';
       if (game.state === 'player-turn') {
         const playerAction = basicStrategy(game);
-        const playerHand = game.playerHands[game.actionableHandIndex];
+        const playerHand = game.playerHands[game.handIndex];
         const playerHandValue = formatHandValue(handValue(playerHand, acesSplit(game.playerHands)));
         log =
           playerAction === PlayerAction.Stand
@@ -130,7 +130,7 @@ const manualPlay = async () => {
         game = nextState(game, playerAction);
       } else {
         game = nextState(game);
-        await sleep(500);
+        await sleep(150);
       }
       printGameState(game);
     }

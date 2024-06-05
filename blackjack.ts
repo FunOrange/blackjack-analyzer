@@ -1,4 +1,4 @@
-import { aperture, assoc, insertAll, pipe, remove, sum } from 'ramda';
+import { assoc, insertAll, pipe, remove, sum } from 'ramda';
 import { Pattern, match } from 'ts-pattern';
 import { red, yellow } from './terminal';
 import { writeFile } from 'fs/promises';
@@ -108,36 +108,29 @@ export const handValue = (
   const hand = _hand.filter((card) => !card.faceDown);
   if (hand.length === 2) {
     const [{ faceValue: card1 }, { faceValue: card2 }] = hand;
-    const handValue =
-      (rules.aceAndTenCountsAsBlackjack && card1 === FaceValue.Ace && card2 === FaceValue.Ten) ||
-      (card1 === FaceValue.Ace && card2 === FaceValue.Jack) ||
-      (card1 === FaceValue.Ace && card2 === FaceValue.Queen) ||
-      (card1 === FaceValue.Ace && card2 === FaceValue.King) ||
-      (rules.aceAndTenCountsAsBlackjack && card1 === FaceValue.Ten && card2 === FaceValue.Ace) ||
-      (card1 === FaceValue.Jack && card2 === FaceValue.Ace) ||
-      (card1 === FaceValue.Queen && card2 === FaceValue.Ace) ||
-      (card1 === FaceValue.King && card2 === FaceValue.Ace)
-        ? 'blackjack'
-        : undefined;
-    if (handValue === 'blackjack') {
+    const blackjackPairs = [
+      rules.aceAndTenCountsAsBlackjack && [FaceValue.Ace, FaceValue.Ten],
+      [FaceValue.Ace, FaceValue.Jack],
+      [FaceValue.Ace, FaceValue.Queen],
+      [FaceValue.Ace, FaceValue.King],
+    ].filter(Boolean);
+    const isBlackjackPair =
+      blackjackPairs.some(([c1, c2]) => c1 === card1 && c2 === card2) ||
+      blackjackPairs.some(([c1, c2]) => c1 === card2 && c2 === card1);
+    if (isBlackjackPair) {
       return acesSplit && !rules.splitAceCanBeBlackjack ? 21 : 'blackjack';
     }
   }
-  const values = hand.map((card) => cardValue(card));
-  const low = sum(values);
-  if (hand.some((card) => card.faceValue === FaceValue.Ace) && low <= 11) {
-    const high = low + 10;
-    if (high > 21) return low;
-    if (high === 21) return 21;
-    return { soft: { low, high } };
-  } else {
-    return low;
-  }
+  const low = sum(hand.map((card) => cardValue(card)));
+  const isSoft = hand.some((card) => card.faceValue === FaceValue.Ace) && low <= 11;
+  return isSoft ? { soft: { low, high: low + 10 } } : low;
 };
+
 const bust = (hand: Card[]) => {
   const value = handValue(hand, undefined);
   return typeof value === 'number' && value > 21;
 };
+
 export const formatHandValue = (value: ReturnType<typeof handValue>) => {
   if (typeof value === 'number') {
     return value;
@@ -156,13 +149,13 @@ const UNSHUFFLED_DECK_TEMPLATE = (() =>
   ))();
 
 export interface BlackJackState {
-  shoe: Card[];
-  playerHands: Card[][];
-  actionableHandIndex: number;
-  dealerHand: Card[];
-  state: 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
   startingBet: number;
+  shoe: Card[];
+  dealerHand: Card[];
+  playerHands: Card[][];
+  handIndex: number;
   bets: number[]; // normally one value but can be multiple for splits
+  state: 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
 }
 
 export const initState = (startingBet: number): BlackJackState => {
@@ -194,7 +187,7 @@ export const initState = (startingBet: number): BlackJackState => {
   return {
     shoe,
     playerHands: [[]],
-    actionableHandIndex: 0,
+    handIndex: 0,
     dealerHand: [],
     state: 'dealing',
     startingBet,
@@ -203,8 +196,8 @@ export const initState = (startingBet: number): BlackJackState => {
 };
 
 const switchToSplitHand = (game: BlackJackState) => {
-  const index = game.playerHands.findIndex((hand, i) => i > game.actionableHandIndex && hand.length === 1);
-  return index !== -1 ? index : game.actionableHandIndex;
+  const index = game.playerHands.findIndex((hand, i) => i > game.handIndex && hand.length === 1);
+  return index !== -1 ? index : game.handIndex;
 };
 
 export const acesSplit = (playerHands: Card[][]) =>
@@ -307,11 +300,11 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
         // player just split, deal 1 card
         // note: bust impossible
         const [playerCard, ...shoe] = game.shoe;
-        const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
-        const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
-        const _playerHandFinished = playerHandFinished(playerHands, game.actionableHandIndex);
-        const actionableHandIndex = _playerHandFinished ? switchToSplitHand(game) : game.actionableHandIndex;
-        const switchingToSplitHand = actionableHandIndex !== game.actionableHandIndex;
+        const playerHand = [...game.playerHands[game.handIndex], playerCard];
+        const playerHands = assoc(game.handIndex, playerHand, game.playerHands);
+        const _playerHandFinished = playerHandFinished(playerHands, game.handIndex);
+        const handIndex = _playerHandFinished ? switchToSplitHand(game) : game.handIndex;
+        const switchingToSplitHand = handIndex !== game.handIndex;
         const state = switchingToSplitHand
           ? ('dealing' as const)
           : _playerHandFinished && !switchingToSplitHand
@@ -321,7 +314,7 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
           ...game,
           shoe,
           playerHands,
-          actionableHandIndex,
+          handIndex,
           state,
         };
       }
@@ -336,11 +329,11 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
       return match(playerAction)
         .with(PlayerAction.Hit, () => {
           const [playerCard, ...shoe] = game.shoe;
-          const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
-          const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
-          const handFinished = playerHandFinished(playerHands, game.actionableHandIndex);
-          const actionableHandIndex = handFinished ? switchToSplitHand(game) : game.actionableHandIndex;
-          const switchingToSplitHand = actionableHandIndex !== game.actionableHandIndex;
+          const playerHand = [...game.playerHands[game.handIndex], playerCard];
+          const playerHands = assoc(game.handIndex, playerHand, game.playerHands);
+          const handFinished = playerHandFinished(playerHands, game.handIndex);
+          const handIndex = handFinished ? switchToSplitHand(game) : game.handIndex;
+          const switchingToSplitHand = handIndex !== game.handIndex;
           const state = playerHands.every(bust)
             ? ('game-over' as const)
             : match({ handFinished, switchingToSplitHand })
@@ -353,17 +346,17 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
             ...game,
             shoe,
             playerHands,
-            actionableHandIndex,
+            handIndex,
             state,
           };
         })
         .with(PlayerAction.Stand, () => {
-          const actionableHandIndex = switchToSplitHand(game);
-          const switchingToSplitHand = actionableHandIndex !== game.actionableHandIndex;
+          const handIndex = switchToSplitHand(game);
+          const switchingToSplitHand = handIndex !== game.handIndex;
           if (switchingToSplitHand) {
             return {
               ...game,
-              actionableHandIndex,
+              handIndex,
               state: 'dealing' as const,
             };
           } else {
@@ -374,14 +367,15 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
           }
         })
         .with(PlayerAction.Double, () => {
+          const bet = game.bets[game.handIndex] + game.startingBet;
+          const bets = assoc(game.handIndex, bet, game.bets);
+
           const [playerCard, ...shoe] = game.shoe;
-          const playerHand = [...game.playerHands[game.actionableHandIndex], playerCard];
-          const playerHands = assoc(game.actionableHandIndex, playerHand, game.playerHands);
-          const bet = game.bets[game.actionableHandIndex] + game.startingBet;
-          const bets = assoc(game.actionableHandIndex, bet, game.bets);
+          const playerHand = [...game.playerHands[game.handIndex], playerCard];
+          const playerHands = assoc(game.handIndex, playerHand, game.playerHands);
           const handFinished = true;
-          const actionableHandIndex = handFinished ? switchToSplitHand(game) : game.actionableHandIndex;
-          const switchingToSplitHand = actionableHandIndex !== game.actionableHandIndex;
+          const handIndex = handFinished ? switchToSplitHand(game) : game.handIndex;
+          const switchingToSplitHand = handIndex !== game.handIndex;
           const state = playerHands.every(bust)
             ? ('game-over' as const)
             : switchingToSplitHand
@@ -392,15 +386,15 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
             shoe,
             playerHands,
             bets,
-            actionableHandIndex,
+            handIndex,
             state,
           };
         })
         .with(PlayerAction.Split, () => {
-          const [card1, card2] = game.playerHands[game.actionableHandIndex];
+          const [card1, card2] = game.playerHands[game.handIndex];
           const playerHands = pipe(
-            remove(game.actionableHandIndex, 1) as any,
-            insertAll(game.actionableHandIndex, [[card1], [card2]]),
+            remove(game.handIndex, 1) as any,
+            insertAll(game.handIndex, [[card1], [card2]]),
           )(game.playerHands);
           const bets = [...game.bets, game.startingBet];
           return { ...game, playerHands, bets, state: 'dealing' as const };
@@ -465,9 +459,9 @@ export const nextState = (game: BlackJackState, playerAction?: PlayerAction): Bl
 export const determineAllowedActions = (game: BlackJackState): PlayerAction[] => {
   if (game.state !== 'player-turn') throw new Error('Not player turn');
 
-  const playerHand = game.playerHands[game.actionableHandIndex];
+  const playerHand = game.playerHands[game.handIndex];
   const playerHandValue = handValue(playerHand, acesSplit(game.playerHands));
-  if (playerHandFinished(game.playerHands, game.actionableHandIndex)) {
+  if (playerHandFinished(game.playerHands, game.handIndex)) {
     printGameState(game);
     throw new Error('Player hand is finished; no allowed actions on this hand.');
   }
@@ -498,7 +492,7 @@ export const determineAllowedActions = (game: BlackJackState): PlayerAction[] =>
     return (
       playerHand.length === 2 &&
       canDoubleOnCurrentHand &&
-      (rules.doubleAfterSplit ? true : game.actionableHandIndex === 0) &&
+      (rules.doubleAfterSplit ? true : game.handIndex === 0) &&
       (rules.doubleOnSplitAce ? true : !acesSplit(game.playerHands))
     );
   })();
@@ -527,7 +521,7 @@ export const formatGameState = (game: BlackJackState): string => {
         'Player Hand:',
         `(${formatHandValue(handValue(playerHand, acesSplit(game.playerHands)))})`,
         playerHand.map((c) => c.faceValue),
-        game.state === 'player-turn' && i === game.actionableHandIndex && '←',
+        game.state === 'player-turn' && i === game.handIndex && '←',
         bust(playerHand) && 'BUST',
         game.bets[i] > game.startingBet && 'D',
       ]
@@ -551,7 +545,7 @@ export const printGameState = (game: BlackJackState) => {
       'Player Hand:',
       `(${formatHandValue(handValue(playerHand, acesSplit(game.playerHands)))})`,
       playerHand.map((c) => c.faceValue),
-      game.state === 'player-turn' && i === game.actionableHandIndex && yellow('←'),
+      game.state === 'player-turn' && i === game.handIndex && yellow('←'),
       bust(playerHand) && red('BUST'),
       game.bets[i] > game.startingBet && yellow('D'),
     ].filter(Boolean);
@@ -644,7 +638,7 @@ const basicStrategyTable = {
 export const basicStrategy = (game: BlackJackState): PlayerAction => {
   if (game.state !== 'player-turn') throw new Error('Not player turn');
 
-  const playerHand = game.playerHands[game.actionableHandIndex];
+  const playerHand = game.playerHands[game.handIndex];
   const playerHandValue = handValue(playerHand, acesSplit(game.playerHands));
   const dealerUpcardValue = cardValue(game.dealerHand[0], { withAceAs11: true });
   const playerHasPair = playerHand.length === 2 && cardValue(playerHand[0]) === cardValue(playerHand[1]);
